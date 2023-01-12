@@ -12,7 +12,7 @@ const twitterClient = new TwitterApi({
   clientSecret: 'YOUR_CLIENT_SECRET',
 });
 
-const callbackURL = 'http://127.0.0.1:5000/faxnow-app/us-central1/callback';
+const callbackURL = 'http://127.0.0.1:5000/gpt3-twitter-bot-bba79/us-central1/callback';
 
 // OpenAI API init
 const { Configuration, OpenAIApi } = require('openai');
@@ -23,7 +23,7 @@ const configuration = new Configuration({
 const openai = new OpenAIApi(configuration);
 
 // STEP 1 - Auth URL
-exports.auth = functions.https.onRequest((request, response) => {
+exports.auth = functions.https.onRequest(async (request, response) => {
   const { url, codeVerifier, state } = twitterClient.generateOAuth2AuthLink(
     callbackURL,
     { scope: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'] }
@@ -36,7 +36,7 @@ exports.auth = functions.https.onRequest((request, response) => {
 });
 
 // STEP 2 - Verify callback code, store access_token 
-exports.callback = functions.https.onRequest((request, response) => {
+exports.callback = functions.https.onRequest(async (request, response) => {
   const { state, code } = request.query;
 
   const dbSnapshot = await dbRef.get();
@@ -64,7 +64,7 @@ exports.callback = functions.https.onRequest((request, response) => {
 });
 
 // STEP 3 - Refresh tokens and post tweets
-exports.tweet = functions.https.onRequest((request, response) => {
+exports.tweet = functions.https.onRequest(async (request, response) => {
   const { refreshToken } = (await dbRef.get()).data();
 
   const {
