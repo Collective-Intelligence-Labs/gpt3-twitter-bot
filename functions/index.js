@@ -1,5 +1,10 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+const fs = require("fs");
+const path = require('path');
+const util = require('util')
+const readFileAsync = util.promisify(fs.readFile)
+
 admin.initializeApp();
 
 // Database reference
@@ -63,26 +68,127 @@ exports.callback = functions.https.onRequest(async (request, response) => {
   response.send(data);
 });
 
+// const SAMPLE_TWEET_ID = "1481065155438202880";
+// const FAKE_TWEET_ID = "1613636533134757903";
+
+const TEXT_DAVINCI_003 = "text-davinci-003";
+const TEXT_DAVINCI_003_MAX_CONTEXT_LEN = 4096;
+const OUTPUT_COMMENT_MAX_LEN = 280;
+
+const CONCEPT_BEGINS_LABEL = "[CT_BEGIN]";
+const CONCEPT_ENDS_LABEL = "[CT_END]";
+
+const POST_BEGINS_LABEL = "[PT_BEGIN]";
+const POST_ENDS_LABEL = "[PT_END]";
+
+const CONCEPT_DETAILS_LINK = "https://docsend.com/view/eqt2iazwmff3jikh";
+const LEARN_MORE_TEXT = `See ${CONCEPT_DETAILS_LINK}`; // in case of Twitter, it may be not worthing to insert the link, as a tweet's max length is 280 characters only. To generate a good-to-go response with the 'text-davinci-003' model, you need to specify at least 2048 tokens in the 'max_tokens' param, which will result in a text with approximately 600 characters in length that will need to be digested.
+
+
 // STEP 3 - Refresh tokens and post tweets
 exports.tweet = functions.https.onRequest(async (request, response) => {
-  const { refreshToken } = (await dbRef.get()).data();
+  try {
 
-  const {
-    client: refreshedClient,
-    accessToken,
-    refreshToken: newRefreshToken,
-  } = await twitterClient.refreshOAuth2Token(refreshToken);
+    const tweetId = request.query.tweetId;
+    if (!tweetId) {
+      throw Error(`The 'tweetId' query parameter must be specified`);
+    }
 
-  await dbRef.set({ accessToken, refreshToken: newRefreshToken });
+    const { refreshToken } = (await dbRef.get()).data();
+    const {
+      client: refreshedClient,
+      accessToken,
+      refreshToken: newRefreshToken,
+    } = await twitterClient.refreshOAuth2Token(refreshToken);
 
-  const nextTweet = await openai.createCompletion('text-davinci-001', {
-    prompt: 'tweet something cool for #techtwitter',
-    max_tokens: 64,
-  });
+    await dbRef.set({ accessToken, refreshToken: newRefreshToken });
 
-  const { data } = await refreshedClient.v2.tweet(
-    nextTweet.data.choices[0].text
-  );
+    const tweet = await refreshedClient.v2.singleTweet(
+      tweetId
+    );
 
-  response.send(data);
+    if (!tweet) {
+      throw Error(`Tweet ${tweetId} is not found`);
+    }
+
+    const INPUT_POST_TEXT = `${tweet.data.text.trim()}`;
+
+    const DIALOG_RULES_PROMPT = `
+I want you to process and remeber a text that I will send to you in my next message (refer to it as the concept-message). 
+The text will start after the keyword ${CONCEPT_BEGINS_LABEL}, and end before the keyword ${CONCEPT_ENDS_LABEL}. 
+After that, I will start to send you messages in a queue (refer to them as post-messages). 
+Each post-message will contain a text that will start after the keyword ${POST_BEGINS_LABEL}, and end before the keyword ${POST_ENDS_LABEL}. 
+I want you to generate a response for each post-message that would be relevant to the concept-message and explain how the idea described in the concept-message could help to achieve the goals described in the post-message you are responding to. 
+There are a few more requirements for the generating response that you need to fulfill. 
+At the first, the response must contain this HTML link - ${CONCEPT_DETAILS_LINK} and propose to learn more about the idea described in the concept-message. 
+At the second, the total length of text in the generated response must not exceed ${OUTPUT_COMMENT_MAX_LEN} characters`;
+
+    const rulesRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+      prompt: DIALOG_RULES_PROMPT,
+      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 4, // the prompt will need more tokens to address all requirements
+    });
+    const rulesResText = rulesRes.data.choices[0].text.trim();
+    console.log("Dialog set:", rulesResText);
+
+    const COMPLETE_WEB3_ARCHITECTURE_DIGEST = await readFileAsync(
+      path.resolve('./complete_web3_architecture_digest.txt')
+    );
+    const CONCEPT_PROMPT = `${CONCEPT_BEGINS_LABEL}${COMPLETE_WEB3_ARCHITECTURE_DIGEST}${CONCEPT_ENDS_LABEL}`;
+    const conceptRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+      prompt: CONCEPT_PROMPT,
+      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 2,
+    });
+    const conceptResText = conceptRes.data.choices[0].text.trim();
+    console.log("Concept uploaded", conceptResText);
+
+
+    const POST_PROMPT = `${POST_BEGINS_LABEL}${INPUT_POST_TEXT}${POST_ENDS_LABEL}`;
+    const commentRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+      prompt: POST_PROMPT,
+      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 2
+    });
+    const commentResText = commentRes.data.choices[0].text.trim();
+    const FULL_COMMENT_TEXT = `${commentResText}`;
+    console.log("Comment generated:", FULL_COMMENT_TEXT);
+
+    const LEARN_MORE_NOTE = `${' ' + LEARN_MORE_TEXT}`;
+
+    const OUTPUT_COMMENT_TEXT = `${FULL_COMMENT_TEXT}${FULL_COMMENT_TEXT.includes(CONCEPT_DETAILS_LINK) ? '' : LEARN_MORE_NOTE}`;
+
+    if (OUTPUT_COMMENT_TEXT.length <= OUTPUT_COMMENT_MAX_LEN) {
+
+      console.log("Output comment:", OUTPUT_COMMENT_TEXT);
+      const { data } = await refreshedClient.v2.reply(
+        OUTPUT_COMMENT_TEXT,
+        tweetId
+      );
+      response.send({ data });
+
+    } else {
+
+      const FULL_COMMENT_DIGEST_PROMPT = `I want you to make a digest that will be no more than ${OUTPUT_COMMENT_MAX_LEN - LEARN_MORE_NOTE.length} characters in length based on the following text: "${FULL_COMMENT_TEXT}"`;
+      const commentDigestRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+        prompt: FULL_COMMENT_DIGEST_PROMPT,
+        max_tokens: 2600 // has to be defined in experimentally
+      });
+      const commentDigestResText = commentDigestRes.data.choices[0].text.trim();
+      const DIGESTED_COMMENT_TEXT = `${commentDigestResText}`;
+      console.log("Comment digested:", DIGESTED_COMMENT_TEXT);
+  
+      const OUTPUT_COMMENT_TEXT = `${DIGESTED_COMMENT_TEXT}${LEARN_MORE_NOTE}`;
+
+      console.log("Output comment:", OUTPUT_COMMENT_TEXT);
+      const { data } = await refreshedClient.v2.reply(
+        OUTPUT_COMMENT_TEXT,
+        tweetId
+      );
+      response.send({ data });
+    }
+
+  }
+
+  catch(err) {
+    console.error("An error occurred while commenting a post: ", err);
+  }
+
 });
