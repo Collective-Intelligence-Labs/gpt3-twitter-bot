@@ -99,8 +99,63 @@ const verifyRequest = (sigHex) => {
   return isVerified;
 }
 
-// STEP 3 - Refresh tokens and post tweets
-exports.tweet = functions.https.onRequest(async (request, response) => {
+// STEP 3 - Upload concept
+exports.concept = functions.https.onRequest(async (request, response) => {
+  try {
+
+    const sigHex = request.query.sigHex;
+    if (!sigHex) {
+      throw Error(`The 'sigHex' query parameter must be specified`);
+    }
+
+    const isVerified = verifyRequest(sigHex);
+    if (!isVerified) {
+      throw Error(`Request from an unauthorized party`);
+    }
+
+    const DIALOG_RULES_PROMPT = `
+I want you to process and remeber a text that I will send to you in my next message (refer to it as the concept-message). 
+The text will start after the keyword ${CONCEPT_BEGINS_LABEL}, and end before the keyword ${CONCEPT_ENDS_LABEL}. 
+After that, I will start to send you messages in a queue (refer to them as post-messages). 
+Each post-message will contain a text that will start after the keyword ${POST_BEGINS_LABEL}, and end before the keyword ${POST_ENDS_LABEL}. 
+I want you to generate a response for each post-message that would be relevant to the concept-message and explain how the idea described in the concept-message could help to achieve the goals described in the post-message you are responding to. 
+There are a few more requirements for the generating response that you need to fulfill. 
+At the first, the response must contain this HTML link - ${CONCEPT_DETAILS_LINK} and propose to learn more about the idea described in the concept-message. 
+At the second, the total length of text in the generated response must not exceed ${OUTPUT_COMMENT_MAX_LEN} characters`;
+
+    const rulesRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+      prompt: DIALOG_RULES_PROMPT,
+      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 4, // the prompt will need more tokens to address all requirements
+    });
+    const rulesResText = rulesRes.data.choices[0].text.trim();
+    console.log("Dialog set:", rulesResText);
+
+    const COMPLETE_WEB3_ARCHITECTURE_DIGEST = await readFileAsync(
+      path.resolve('./complete_web3_architecture_digest.txt')
+    );
+    const CONCEPT_PROMPT = `${CONCEPT_BEGINS_LABEL}${COMPLETE_WEB3_ARCHITECTURE_DIGEST}${CONCEPT_ENDS_LABEL}`;
+    const conceptRes = await openai.createCompletion(TEXT_DAVINCI_003, {
+      prompt: CONCEPT_PROMPT,
+      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 2,
+    });
+    const conceptResText = conceptRes.data.choices[0].text.trim();
+    console.log("Concept uploaded", conceptResText);
+
+    response.status(400).send({ rulesResText, conceptResText });
+
+  }
+
+  catch(err) {
+    console.error("An error occurred while commenting a post: ", err);
+    response.status(400).send({ err: err.message });
+  }
+
+});
+
+
+
+// STEP 4 - Comment to a tweet
+exports.comment = functions.https.onRequest(async (request, response) => {
   try {
 
     const sigHex = request.query.sigHex;
@@ -136,35 +191,6 @@ exports.tweet = functions.https.onRequest(async (request, response) => {
     }
 
     const INPUT_POST_TEXT = `${tweet.data.text.trim()}`;
-
-    const DIALOG_RULES_PROMPT = `
-I want you to process and remeber a text that I will send to you in my next message (refer to it as the concept-message). 
-The text will start after the keyword ${CONCEPT_BEGINS_LABEL}, and end before the keyword ${CONCEPT_ENDS_LABEL}. 
-After that, I will start to send you messages in a queue (refer to them as post-messages). 
-Each post-message will contain a text that will start after the keyword ${POST_BEGINS_LABEL}, and end before the keyword ${POST_ENDS_LABEL}. 
-I want you to generate a response for each post-message that would be relevant to the concept-message and explain how the idea described in the concept-message could help to achieve the goals described in the post-message you are responding to. 
-There are a few more requirements for the generating response that you need to fulfill. 
-At the first, the response must contain this HTML link - ${CONCEPT_DETAILS_LINK} and propose to learn more about the idea described in the concept-message. 
-At the second, the total length of text in the generated response must not exceed ${OUTPUT_COMMENT_MAX_LEN} characters`;
-
-    const rulesRes = await openai.createCompletion(TEXT_DAVINCI_003, {
-      prompt: DIALOG_RULES_PROMPT,
-      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 4, // the prompt will need more tokens to address all requirements
-    });
-    const rulesResText = rulesRes.data.choices[0].text.trim();
-    console.log("Dialog set:", rulesResText);
-
-    const COMPLETE_WEB3_ARCHITECTURE_DIGEST = await readFileAsync(
-      path.resolve('./complete_web3_architecture_digest.txt')
-    );
-    const CONCEPT_PROMPT = `${CONCEPT_BEGINS_LABEL}${COMPLETE_WEB3_ARCHITECTURE_DIGEST}${CONCEPT_ENDS_LABEL}`;
-    const conceptRes = await openai.createCompletion(TEXT_DAVINCI_003, {
-      prompt: CONCEPT_PROMPT,
-      max_tokens: TEXT_DAVINCI_003_MAX_CONTEXT_LEN / 2,
-    });
-    const conceptResText = conceptRes.data.choices[0].text.trim();
-    console.log("Concept uploaded", conceptResText);
-
 
     const POST_PROMPT = `${POST_BEGINS_LABEL}${INPUT_POST_TEXT}${POST_ENDS_LABEL}`;
     const commentRes = await openai.createCompletion(TEXT_DAVINCI_003, {
