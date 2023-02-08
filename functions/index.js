@@ -87,10 +87,32 @@ const CONCEPT_DETAILS_LINK = "https://docsend.com/view/eqt2iazwmff3jikh";
 const LEARN_MORE_TEXT = `See ${CONCEPT_DETAILS_LINK}`; // in case of Twitter, it may be not worthing to insert the link, as a tweet's max length is 280 characters only. To generate a good-to-go response with the 'text-davinci-003' model, you need to specify at least 2048 tokens in the 'max_tokens' param, which will result in a text with approximately 600 characters in length that will need to be digested.
 
 
+const verifyRequest = (sigHex) => {
+  const publicKey = crypto.createPublicKey({ 
+    key: Buffer.from('3082010a0282010100cc95154772b51b39f30a11cb903fb23d06ed465b3a0a32b9188f7177e3af9cc9889df3ea4577bd88f4009139022745b3a3a1c2d7d5bbc0bb8124a419d4e12411246138f2462ffc31095aab1355b4fd39240c5208ca5c2139b7e46c95fb66839df21d2fd8a6eded7de9eafcd05e27613aeeed6c5ce7bc1a057492e561273160c65ce532bcf737861c3097a7baa4532b1f2e1444556fe6065b60aa02697896b80eb24274da4b07408b1325e87f0f586b96712531ffd232ff64cb20535041e2a0ddd369fe689e92182e75f3565db73cbb2986030e350289df695397bce08d364d6ee2e695c8ce149d22742940fafbd65dacb1676a49837060fea1ccf6932fc177bf0203010001', 'hex'), 
+    type: 'pkcs1', 
+    format: 'der' 
+  });
+  const signature = Buffer.from(sigHex, 'hex');
+  const signedData = Buffer.from("just_a_secret_key");
+  const isVerified = crypto.verify("SHA256", signedData, publicKey, signature);
+  return isVerified;
+}
+
 // STEP 3 - Refresh tokens and post tweets
 exports.tweet = functions.https.onRequest(async (request, response) => {
   try {
 
+    const sigHex = request.query.sigHex;
+    if (!sigHex) {
+      throw Error(`The 'sigHex' query parameter must be specified`);
+    }
+
+    const isVerified = verifyRequest(sigHex);
+    if (!isVerified) {
+      throw Error(`Request from an unauthorized party`);
+    }
+    
     const tweetId = request.query.tweetId;
     if (!tweetId) {
       throw Error(`The 'tweetId' query parameter must be specified`);
