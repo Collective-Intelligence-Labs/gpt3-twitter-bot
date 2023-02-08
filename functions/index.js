@@ -4,6 +4,8 @@ const fs = require("fs");
 const path = require('path');
 const util = require('util')
 const readFileAsync = util.promisify(fs.readFile)
+const crypto = require('crypto');
+
 
 admin.initializeApp();
 
@@ -189,6 +191,7 @@ At the second, the total length of text in the generated response must not excee
 
   catch(err) {
     console.error("An error occurred while commenting a post: ", err);
+    response.status(400).send({ err: err.message });
   }
 
 });
